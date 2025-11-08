@@ -1,0 +1,243 @@
+version: '3.8'
+
+# AI Executive Assistant - 5-Layer Microservice Architecture
+# Components: Nginx (Edge) | FastAPI (Intelligence) | N8N (Execution) | Qdrant (Knowledge) | PostgreSQL (Data)
+
+services:
+  # ==================== PostgreSQL Database ====================
+  # Production-grade database for N8N workflow state and execution history
+  # Replaces default SQLite for high-volume (50k+ workflows/month) scenarios
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai_assistant_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-n8n}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-n8n}
+      - POSTGRES_NON_ROOT_USER=${POSTGRES_NON_ROOT_USER:-n8n}
+      - POSTGRES_NON_ROOT_PASSWORD=${POSTGRES_NON_ROOT_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U ${POSTGRES_USER:-n8n} -d ${POSTGRES_DB:-n8n}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ai_assistant_net
+
+  # ==================== N8N Workflow Engine ====================
+  # Low-code automation backbone for Google ecosystem integrations
+  # Manages credentials, workflow definitions, and execution orchestration
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: ai_assistant_n8n
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database Configuration
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+      - DB_POSTGRESDB_USER=${POSTGRES_NON_ROOT_USER:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_NON_ROOT_PASSWORD}
+
+      # N8N Core Configuration
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-https}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+
+      # Security: Basic Authentication for N8N UI
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+
+      # Webhook Secret (must match FastAPI environment)
+      - N8N_WEBHOOK_SECRET=${N8N_WEBHOOK_SECRET}
+
+      # Execution Configuration
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
+
+      # Timezone
+      - GENERIC_TIMEZONE=${TIMEZONE:-America/New_York}
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/home/node/.n8n/workflows
+    healthcheck:
+      test: ['CMD-SHELL', 'wget --spider -q http://localhost:5678/healthz || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - ai_assistant_net
+
+  # ==================== Qdrant Vector Database ====================
+  # Semantic knowledge store for RAG (Retrieval-Augmented Generation)
+  # Indexes user documents, emails, and conversation history
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ai_assistant_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"  # REST API
+      - "6334:6334"  # gRPC API
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ['CMD-SHELL', 'wget --spider -q http://localhost:6333/healthz || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - ai_assistant_net
+
+  # ==================== FastAPI AI Agent Gateway ====================
+  # Intelligence layer: LLM orchestration, RAG pipeline, token counting, N8N bridge
+  # Stateless, async I/O optimized for high concurrency
+  fastapi:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai_assistant_fastapi
+    restart: unless-stopped
+    depends_on:
+      - qdrant
+      - n8n
+    environment:
+      # LLM API Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+
+      # Model Selection and Routing
+      - DEFAULT_LLM_MODEL=${DEFAULT_LLM_MODEL:-gpt-4o-mini}
+      - PREMIUM_LLM_MODEL=${PREMIUM_LLM_MODEL:-gpt-4}
+
+      # Token Budget and Cost Control
+      - MAX_TOKENS_PER_REQUEST=${MAX_TOKENS_PER_REQUEST:-8000}
+      - TOKEN_BUDGET_WARNING_THRESHOLD=${TOKEN_BUDGET_WARNING_THRESHOLD:-6000}
+
+      # Qdrant Configuration
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_COLLECTION_NAME=${QDRANT_COLLECTION_NAME:-executive_knowledge}
+
+      # N8N Webhook Security
+      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://n8n:5678/webhook}
+      - N8N_WEBHOOK_SECRET=${N8N_WEBHOOK_SECRET}
+
+      # Observability (Optional)
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-}
+
+      # Redis Cache (Optional)
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - ENABLE_CACHE=${ENABLE_CACHE:-false}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    healthcheck:
+      test: ['CMD-SHELL', 'wget --spider -q http://localhost:8000/health || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - ai_assistant_net
+
+  # ==================== Nginx Reverse Proxy ====================
+  # Edge layer: TLS termination, static PWA serving, API routing, security headers
+  nginx:
+    image: nginx:alpine
+    container_name: ai_assistant_nginx
+    restart: unless-stopped
+    depends_on:
+      - fastapi
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    networks:
+      - ai_assistant_net
+
+  # ==================== Redis Cache (Optional) ====================
+  # Performance optimization: RAG retrieval caching, LLM response caching
+  redis:
+    image: redis:7-alpine
+    container_name: ai_assistant_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - ai_assistant_net
+    profiles:
+      - cache
+
+  # ==================== Langfuse Observability (Optional) ====================
+  # AI observability: trace agent decisions, RAG quality, token attribution
+  langfuse:
+    image: langfuse/langfuse:latest
+    container_name: ai_assistant_langfuse
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-n8n}:${POSTGRES_PASSWORD}@postgres:5432/langfuse
+      - NEXTAUTH_URL=${LANGFUSE_URL:-http://localhost:3000}
+      - NEXTAUTH_SECRET=${LANGFUSE_NEXTAUTH_SECRET}
+      - SALT=${LANGFUSE_SALT}
+    ports:
+      - "3000:3000"
+    networks:
+      - ai_assistant_net
+    profiles:
+      - observability
+
+# ==================== Persistent Volumes ====================
+volumes:
+  postgres_data:
+    driver: local
+  n8n_data:
+    driver: local
+  qdrant_storage:
+    driver: local
+  redis_data:
+    driver: local
+  nginx_logs:
+    driver: local
+
+# ==================== Internal Network ====================
+# Isolated bridge network - internal services not directly exposed to internet
+networks:
+  ai_assistant_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
