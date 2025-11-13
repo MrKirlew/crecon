@@ -246,8 +246,7 @@ GOOGLE_WORKSPACE_TOOLS = {
                     },
                     "parameters": {
                         "type": "object",
-                        "description": "Operation-specific parameters exactly as expected by the workflow",
-                        "additionalProperties": True
+                        "description": "Operation-specific parameters exactly as expected by the workflow"
                     }
                 },
                 "required": ["operation"]
@@ -266,8 +265,7 @@ GOOGLE_WORKSPACE_TOOLS = {
                     },
                     "parameters": {
                         "type": "object",
-                        "description": "Operation-specific fields (eventId, time ranges, etc.)",
-                        "additionalProperties": True
+                        "description": "Operation-specific fields (eventId, time ranges, etc.)"
                     }
                 },
                 "required": ["operation"]
@@ -286,8 +284,7 @@ GOOGLE_WORKSPACE_TOOLS = {
                     },
                     "parameters": {
                         "type": "object",
-                        "description": "Task-specific parameters (taskListId, due, title, etc.)",
-                        "additionalProperties": True
+                        "description": "Task-specific parameters (taskListId, due, title, etc.)"
                     }
                 },
                 "required": ["operation"]
@@ -306,8 +303,7 @@ GOOGLE_WORKSPACE_TOOLS = {
                     },
                     "parameters": {
                         "type": "object",
-                        "description": "Operation-specific parameters (spreadsheetId, range, values, etc.)",
-                        "additionalProperties": True
+                        "description": "Operation-specific parameters (spreadsheetId, range, values, etc.)"
                     }
                 },
                 "required": ["operation"]
@@ -326,8 +322,7 @@ GOOGLE_WORKSPACE_TOOLS = {
                     },
                     "parameters": {
                         "type": "object",
-                        "description": "Operation-specific parameters (fileId, folderId, permissions, etc.)",
-                        "additionalProperties": True
+                        "description": "Operation-specific parameters (fileId, folderId, permissions, etc.)"
                     }
                 },
                 "required": ["operation"]
@@ -346,8 +341,7 @@ GOOGLE_WORKSPACE_TOOLS = {
                     },
                     "parameters": {
                         "type": "object",
-                        "description": "Contact fields (given_name, family_name, email, phone numbers, etc.)",
-                        "additionalProperties": True
+                        "description": "Contact fields (given_name, family_name, email, phone numbers, etc.)"
                     }
                 },
                 "required": ["operation"]
@@ -365,8 +359,7 @@ GOOGLE_WORKSPACE_TOOLS = {
                     },
                     "data": {
                         "type": "object",
-                        "description": "Payload forwarded to the workflow",
-                        "additionalProperties": True
+                        "description": "Payload forwarded to the workflow"
                     },
                     "async": {
                         "type": "boolean",
