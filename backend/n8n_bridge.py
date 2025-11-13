@@ -4,7 +4,7 @@ Translates AI intent into structured N8N workflow payloads
 Implements header-based authentication
 """
 import httpx
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 import logging
 from config import settings
 from datetime import datetime
@@ -41,6 +41,46 @@ class N8NBridge:
             "X-N8N-WEBHOOK-SECRET": self.webhook_secret,
             "User-Agent": "AI-Executive-Assistant/1.0"
         }
+
+    async def _post_webhook(
+        self,
+        endpoint: str,
+        payload: Dict[str, Any],
+        timeout: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """
+        Helper to POST JSON payloads directly to an N8N webhook endpoint.
+        """
+        webhook_url = f"{self.webhook_base_url}/{endpoint}"
+        headers = self._get_auth_headers()
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    webhook_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=timeout or self.timeout
+                )
+
+            if response.status_code >= 400:
+                logger.error(
+                    f"N8N webhook {endpoint} failed: {response.status_code} - {response.text}"
+                )
+                raise N8NWorkflowError(
+                    f"Webhook {endpoint} failed with status {response.status_code}"
+                )
+
+            result = response.json() if response.text else {}
+            return {
+                "success": True,
+                "result": result,
+                "status_code": response.status_code
+            }
+
+        except httpx.RequestError as e:
+            logger.error(f"N8N request error ({endpoint}): {e}")
+            raise N8NWorkflowError(f"Failed to connect to N8N ({endpoint}): {str(e)}")
 
     async def execute_workflow(
         self,
@@ -139,7 +179,7 @@ class N8NBridge:
         description: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Create a Google Calendar event via N8N workflow
+        Create a Google Calendar event via N8N calendar workflow
 
         Args:
             title: Event title
@@ -152,15 +192,19 @@ class N8NBridge:
             Workflow execution result
         """
         payload = {
-            "action": "create_event",
-            "title": title,
-            "start_time": start_time,
-            "end_time": end_time,
-            "attendees": attendees or [],
-            "description": description or ""
+            "body": {
+                "data": {
+                    "operation": "create",
+                    "title": title,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "description": description or "",
+                    "attendees": attendees or []
+                }
+            }
         }
 
-        return await self.execute_workflow("google-calendar", payload)
+        return await self._post_webhook("calendar", payload)
 
     async def send_email(
         self,
@@ -172,7 +216,7 @@ class N8NBridge:
         attachments: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
-        Send email via Gmail through N8N workflow
+        Send email via Gmail through N8N gmail workflow
 
         Args:
             to: List of recipient email addresses
@@ -186,16 +230,19 @@ class N8NBridge:
             Workflow execution result
         """
         payload = {
-            "action": "send_email",
-            "to": to,
-            "subject": subject,
-            "body": body,
-            "cc": cc or [],
-            "bcc": bcc or [],
-            "attachments": attachments or []
+            "body": {
+                "data": {
+                    "operation": "send",
+                    "to": to,
+                    "subject": subject,
+                    "body": body,
+                    "cc": cc or [],
+                    "bcc": bcc or []
+                }
+            }
         }
 
-        return await self.execute_workflow("gmail", payload)
+        return await self._post_webhook("gmail", payload)
 
     async def update_spreadsheet(
         self,
@@ -206,7 +253,7 @@ class N8NBridge:
         append: bool = True
     ) -> Dict[str, Any]:
         """
-        Update Google Sheets via N8N workflow
+        Update Google Sheets via N8N unified workflow
 
         Args:
             spreadsheet_id: Google Sheets document ID
@@ -219,14 +266,17 @@ class N8NBridge:
             Workflow execution result
         """
         payload = {
-            "action": "update_sheet" if not append else "append_sheet",
-            "spreadsheet_id": spreadsheet_id,
-            "sheet_name": sheet_name,
-            "range": range,
-            "values": values
+            "action": "sheets",
+            "data": {
+                "spreadsheet_id": spreadsheet_id,
+                "sheet_name": sheet_name,
+                "range": range,
+                "values": values,
+                "append": append
+            }
         }
 
-        return await self.execute_workflow("google-sheets", payload)
+        return await self.execute_workflow("google-workspace", payload)
 
     async def search_contacts(
         self,
@@ -249,7 +299,47 @@ class N8NBridge:
             "max_results": max_results
         }
 
-        return await self.execute_workflow("google-contacts", payload)
+        return await self.execute_workflow("contacts/search", payload)
+
+    async def upsert_contact(
+        self,
+        email: str,
+        given_name: Optional[str] = None,
+        family_name: Optional[str] = None,
+        phone_numbers: Optional[List[str]] = None,
+        organization: Optional[str] = None,
+        job_title: Optional[str] = None,
+        notes: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create or update a Google Contact via N8N unified workflow
+
+        Args:
+            email: Primary email address (used for lookup)
+            given_name: First name
+            family_name: Last name
+            phone_numbers: List of phone numbers
+            organization: Company/organization name
+            job_title: Job title
+            notes: Additional notes
+
+        Returns:
+            Workflow execution result with contact resource name
+        """
+        payload = {
+            "action": "contacts",
+            "data": {
+                "email": email,
+                "given_name": given_name,
+                "family_name": family_name,
+                "phone_numbers": phone_numbers or [],
+                "organization": organization,
+                "job_title": job_title,
+                "notes": notes
+            }
+        }
+
+        return await self.execute_workflow("google-workspace", payload)
 
     async def archive_document(
         self,
@@ -276,6 +366,60 @@ class N8NBridge:
         }
 
         return await self.execute_workflow("google-drive", payload)
+
+    async def execute_service_operation(
+        self,
+        service: str,
+        operation: str,
+        parameters: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Generic helper for invoking any Google Workspace service workflow.
+
+        Args:
+            service: Service name (gmail, calendar, drive, sheets, contacts, tasks)
+            operation: Operation identifier supported by the workflow
+            parameters: Operation-specific parameters
+        """
+        if not service or not operation:
+            raise ValueError("service and operation are required")
+
+        payload = {
+            "body": {
+                "data": {
+                    "operation": operation,
+                    **(parameters or {})
+                }
+            }
+        }
+
+        return await self._post_webhook(service, payload)
+
+    async def execute_router_action(
+        self,
+        action: str,
+        data: Optional[Dict[str, Any]] = None,
+        async_execution: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Call the unified workspace router (service.resource.operation).
+        """
+        if not action:
+            raise ValueError("action is required for router execution")
+
+        payload = {
+            "body": {
+                "action": action,
+                "data": data or {},
+                "async": async_execution
+            },
+            # Duplicate at root for backwards compatibility with workflows that read from $json
+            "action": action,
+            "data": data or {},
+            "async": async_execution
+        }
+
+        return await self._post_webhook("workspace-router", payload)
 
     async def health_check(self) -> bool:
         """
