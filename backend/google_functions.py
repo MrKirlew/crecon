@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict
 
 from config import settings
-from backend.n8n_bridge import N8NBridge
+from n8n_bridge import N8NBridge
 
 logger = logging.getLogger(__name__)
 
