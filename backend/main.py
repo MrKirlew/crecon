@@ -23,6 +23,14 @@ from n8n_bridge import N8NBridge, get_n8n_bridge, N8NWorkflowError
 from google_tools import GOOGLE_WORKSPACE_TOOLS
 from google_functions import execute_google_function
 
+# Import AI-augmented endpoints
+try:
+    from ai_endpoints import router as ai_router
+    ai_endpoints_available = True
+except ImportError:
+    ai_endpoints_available = False
+    logger.warning("AI endpoints not available - ai_endpoints.py not found")
+
 # Optional imports
 try:
     from langfuse import Langfuse
@@ -55,6 +63,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include AI-augmented endpoints router
+if ai_endpoints_available:
+    app.include_router(ai_router)
+    logger.info("AI-augmented endpoints registered (3,000+ command variations)")
 
 # Optional Langfuse observability
 langfuse_client = None
