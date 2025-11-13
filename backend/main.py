@@ -123,7 +123,7 @@ async def call_llm(
 
         # Route to Google Gemini for gemini* models
         elif model.startswith('gemini'):
-            from google import genai
+            import google.generativeai as genai
 
             logger.info(f"Calling Google Gemini with model: {model}")
 

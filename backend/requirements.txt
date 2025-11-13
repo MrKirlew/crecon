@@ -3,17 +3,21 @@
 # ==================== Core Web Framework ====================
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
-pydantic==2.5.3
+pydantic==2.9.2
 pydantic-settings==2.1.0
 python-multipart==0.0.6
 
 # ==================== ASGI and HTTP ====================
-httpx==0.26.0
+httpx==0.28.1
 aiohttp==3.9.1
 
 # ==================== LLM Providers ====================
+# Open Source AI (Ollama)
+ollama==0.6.0
+
+# Commercial AI (Optional - for fallback)
 openai==1.10.0
-anthropic==0.8.1
+anthropic==0.45.0
 google-generativeai==0.3.2
 
 # ==================== LangChain (Tool Use & Orchestration) ====================
@@ -26,13 +30,13 @@ langchain-community==0.0.17
 tiktoken==0.5.2
 
 # ==================== Vector Database (Qdrant) ====================
-qdrant-client==1.7.3
+qdrant-client==1.9.0
 
 # ==================== Embeddings ====================
 sentence-transformers==2.3.1
 
 # ==================== Observability (Optional - Langfuse) ====================
-langfuse==2.16.3
+langfuse==2.60.10
 
 # ==================== Caching (Optional - Redis) ====================
 redis==5.0.1

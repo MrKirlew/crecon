@@ -53,7 +53,7 @@ class ChatResponse(BaseModel):
     rag_sources: Optional[List[Dict]] = None
     tool_calls: Optional[List[Dict]] = None
     model: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
 
 
 # ==================== RAG Models ====================
@@ -136,6 +136,23 @@ class SpreadsheeetUpdateRequest(BaseModel):
     range: str = Field(..., min_length=1)
     values: List[List[Any]] = Field(..., min_items=1)
     append: bool = Field(default=True)
+
+
+class ContactUpsertRequest(BaseModel):
+    """Request to create or update a Google Contact"""
+    email: str = Field(..., description="Primary email address")
+    given_name: Optional[str] = Field(default=None, max_length=100)
+    family_name: Optional[str] = Field(default=None, max_length=100)
+    phone_numbers: Optional[List[str]] = Field(default=None)
+    organization: Optional[str] = Field(default=None, max_length=200)
+    job_title: Optional[str] = Field(default=None, max_length=200)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+    @validator('email')
+    def validate_email(cls, v):
+        if '@' not in v:
+            raise ValueError(f"Invalid email: {v}")
+        return v
 
 
 class WorkflowExecutionResponse(BaseModel):

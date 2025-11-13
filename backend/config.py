@@ -13,14 +13,23 @@ class Settings(BaseSettings):
     All sensitive values should be provided via .env file
     """
 
+    # ==================== Ollama Configuration (Open Source AI) ====================
+    ollama_host: str = "http://ollama:11434"
+    ollama_base_url: str = "http://ollama:11434"
+
     # ==================== LLM API Configuration ====================
-    openai_api_key: str
+    # Model routing is automatic based on model name prefix:
+    # - llama*, mistral*, etc. → Ollama (free, local)
+    # - gemini* → Google Gemini API
+    # - gpt* → OpenAI API
+    # - claude* → Anthropic API
+    openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
 
     # Model Selection and Routing
-    default_llm_model: str = "gpt-4o-mini"
-    premium_llm_model: str = "gpt-4"
+    default_llm_model: str = "llama3.2:3b"  # Free Ollama model
+    premium_llm_model: str = "gemini-2.0-flash"  # Fast Gemini model
 
     # Token Budget and Cost Control
     max_tokens_per_request: int = 8000
@@ -68,6 +77,17 @@ class Settings(BaseSettings):
     # ==================== Cost Tracking ====================
     # Cost per 1M tokens (update based on current pricing)
     cost_per_1m_input_tokens: dict[str, float] = {
+        # Open Source Models (Ollama) - FREE
+        "llama3.2:3b": 0.0,
+        "llama3.2:7b": 0.0,
+        "llama3.2": 0.0,
+        "mistral": 0.0,
+        "mistral:7b": 0.0,
+        "phi3": 0.0,
+        "gemma2": 0.0,
+        "qwen2.5": 0.0,
+        "mixtral:8x7b": 0.0,
+        # Commercial Models
         "gpt-4o-mini": 0.60,
         "gpt-4": 1.25,
         "gpt-4-turbo": 10.00,
@@ -77,6 +97,17 @@ class Settings(BaseSettings):
     }
 
     cost_per_1m_output_tokens: dict[str, float] = {
+        # Open Source Models (Ollama) - FREE
+        "llama3.2:3b": 0.0,
+        "llama3.2:7b": 0.0,
+        "llama3.2": 0.0,
+        "mistral": 0.0,
+        "mistral:7b": 0.0,
+        "phi3": 0.0,
+        "gemma2": 0.0,
+        "qwen2.5": 0.0,
+        "mixtral:8x7b": 0.0,
+        # Commercial Models
         "gpt-4o-mini": 2.40,
         "gpt-4": 10.00,
         "gpt-4-turbo": 30.00,
