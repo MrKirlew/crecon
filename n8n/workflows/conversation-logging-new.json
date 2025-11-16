@@ -1,0 +1,108 @@
+{
+  "name": "Conversation Logging",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "conversation-log",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-conversation-log",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "conversation-logging"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "sheetId": {
+          "__rl": true,
+          "value": "11Vs7Zr1bjj0E5vXU8M58m1Z9MLLgmUmKVpelcvUJAgs",
+          "mode": "id"
+        },
+        "range": "convologging!A:G",
+        "options": {
+          "valueInputMode": "USER_ENTERED"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.body.timestamp }}",
+            "User Name": "={{ $json.body.user_name }}",
+            "User Message": "={{ $json.body.user_message }}",
+            "Assistant Message": "={{ $json.body.assistant_message }}",
+            "Latitude": "={{ $json.body.latitude }}",
+            "Longitude": "={{ $json.body.longitude }}",
+            "Location": "={{ $json.body.latitude && $json.body.longitude ? $json.body.latitude + ',' + $json.body.longitude : '' }}"
+          }
+        }
+      },
+      "id": "google-sheets-append",
+      "name": "Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "QUDQtIspSiv09Ugs",
+          "name": "google-sheets-prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"success\", \"message\": \"Conversation logged to Google Sheets\", \"timestamp\": $json.body.timestamp } }}",
+        "options": {}
+      },
+      "id": "response-success",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        680,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}

@@ -100,9 +100,9 @@ class SheetsLogger:
                 }
             }
 
-            # Send directly to the google-workspace webhook endpoint
-            # This matches the N8N workflow configuration at /webhook/google-workspace
-            result = await self.n8n_bridge._post_webhook("google-workspace", payload)
+            # Send directly to the conversation-log webhook endpoint
+            # This matches the N8N workflow configuration at /webhook/conversation-log
+            result = await self.n8n_bridge._post_webhook("conversation-log", payload)
 
             if result.get("success"):
                 logger.info(f"Logged conversation to Sheets: {timestamp}")
