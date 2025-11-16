@@ -1,0 +1,128 @@
+{
+  "name": "Drive Operations",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "drive",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode"
+      },
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        600
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "\n// Google Drive Operations Handler - Supports 17 operations\nconst op = $input.item.json.body.data.operation;\nconst data = $input.item.json.body.data;\nlet url, method, body, headers = {}, bodyRaw, rawContentType;\n\nswitch(op) {\n  // FILE OPERATIONS\n  case 'file.upload':\n    url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';\n    method = 'POST';\n    body = {\n      name: data.name,\n      parents: data.parents || [],\n      mimeType: data.mimeType\n    };\n    break;\n  case 'file.createFromText':\n    const boundaryTxt = 'n8nBoundary' + Date.now();\n    const metadataTxt = {\n      name: data.name,\n      mimeType: data.mimeType || 'text/plain',\n      parents: data.parents || []\n    };\n    const mediaTxt = data.content || '';\n    bodyRaw = [\n      `--${boundaryTxt}`,\n      'Content-Type: application/json; charset=UTF-8',\n      '',\n      JSON.stringify(metadataTxt),\n      `--${boundaryTxt}`,\n      `Content-Type: ${data.mimeType || 'text/plain'}`,\n      '',\n      mediaTxt,\n      `--${boundaryTxt}--`\n    ].join('\r\n');\n    rawContentType = `multipart/related; boundary=${boundaryTxt}`;\n    url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';\n    method = 'POST';\n    break;\n  case 'file.createDocFromText':\n    const boundaryDoc = 'n8nDocBoundary' + Date.now();\n    const metadataDoc = {\n      name: data.name,\n      mimeType: 'application/vnd.google-apps.document'\n    };\n    if (data.folderId) {\n      metadataDoc.parents = [data.folderId];\n    }\n    const docBody = data.documentContent || '';\n    bodyRaw = [\n      `--${boundaryDoc}`,\n      'Content-Type: application/json; charset=UTF-8',\n      '',\n      JSON.stringify(metadataDoc),\n      `--${boundaryDoc}`,\n      'Content-Type: text/plain; charset=UTF-8',\n      '',\n      docBody,\n      `--${boundaryDoc}--`\n    ].join('\r\n');\n    rawContentType = `multipart/related; boundary=${boundaryDoc}`;\n    url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';\n    method = 'POST';\n    break;\n  case 'file.download':\n    url = `https://www.googleapis.com/drive/v3/files/${data.fileId}?alt=media`;\n    method = 'GET';\n    break;\n  case 'file.copy':\n    url = `https://www.googleapis.com/drive/v3/files/${data.fileId}/copy`;\n    method = 'POST';\n    body = { name: data.newName, parents: data.parents };\n    break;\n  case 'file.move':\n    url = `https://www.googleapis.com/drive/v3/files/${data.fileId}?addParents=${data.newParentId}&removeParents=${data.oldParentId}`;\n    method = 'PATCH';\n    break;\n  case 'file.delete':\n    url = `https://www.googleapis.com/drive/v3/files/${data.fileId}`;\n    method = 'DELETE';\n    break;\n  case 'file.share':\n    url = `https://www.googleapis.com/drive/v3/files/${data.fileId}/permissions`;\n    method = 'POST';\n    body = {\n      role: data.role || 'reader',\n      type: data.type || 'user',\n      emailAddress: data.emailAddress\n    };\n    break;\n  case 'file.update':\n    url = `https://www.googleapis.com/drive/v3/files/${data.fileId}`;\n    method = 'PATCH';\n    body = {\n      name: data.name,\n      description: data.description\n    };\n    break;\n\n  // FOLDER OPERATIONS\n  case 'folder.create':\n    url = 'https://www.googleapis.com/drive/v3/files';\n    method = 'POST';\n    body = {\n      name: data.name,\n      mimeType: 'application/vnd.google-apps.folder',\n      parents: data.parents || []\n    };\n    break;\n  case 'folder.delete':\n    url = `https://www.googleapis.com/drive/v3/files/${data.folderId}`;\n    method = 'DELETE';\n    break;\n  case 'folder.share':\n    url = `https://www.googleapis.com/drive/v3/files/${data.folderId}/permissions`;\n    method = 'POST';\n    body = {\n      role: data.role || 'reader',\n      type: data.type || 'user',\n      emailAddress: data.emailAddress\n    };\n    break;\n\n  // SEARCH OPERATIONS\n  case 'search':\n    const query = data.query || `name contains '${data.name}'`;\n    url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&pageSize=${data.pageSize || 100}`;\n    method = 'GET';\n    break;\n\n  // SHARED DRIVE OPERATIONS\n  case 'sharedDrive.create':\n    url = 'https://www.googleapis.com/drive/v3/drives?requestId=' + Date.now();\n    method = 'POST';\n    body = { name: data.name };\n    break;\n  case 'sharedDrive.delete':\n    url = `https://www.googleapis.com/drive/v3/drives/${data.driveId}`;\n    method = 'DELETE';\n    break;\n  case 'sharedDrive.get':\n    url = `https://www.googleapis.com/drive/v3/drives/${data.driveId}`;\n    method = 'GET';\n    break;\n  case 'sharedDrive.list':\n    url = `https://www.googleapis.com/drive/v3/drives?pageSize=${data.pageSize || 100}`;\n    method = 'GET';\n    break;\n  case 'sharedDrive.update':\n    url = `https://www.googleapis.com/drive/v3/drives/${data.driveId}`;\n    method = 'PATCH';\n    body = { name: data.name };\n    break;\n\n  default:\n    throw new Error(`Unsupported Drive operation: ${op}`);\n}\n\nreturn { json: { url, method, body, headers, operation: op, bodyRaw, rawContentType } };\n"
+      },
+      "id": "build-request",
+      "name": "Build Drive Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "={{ $json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "raw",
+        "options": {
+          "rawContentType": "={{ $json.rawContentType || 'application/json' }}"
+        },
+        "rawBody": "={{ $json.bodyRaw ? $json.bodyRaw : ($json.body ? JSON.stringify($json.body) : '{}') }}",
+        "bodyContentType": "raw"
+      },
+      "id": "drive-api",
+      "name": "Drive API Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        750,
+        600
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "lQzBXd1fx4PpJWh2",
+          "name": "google-drive-prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, service: 'drive', operation: $('Build Drive Request').item.json.operation, data: $json } }}",
+        "options": {}
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        600
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build Drive Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Drive Request": {
+      "main": [
+        [
+          {
+            "node": "Drive API Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive API Call": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    "drive",
+    "files"
+  ],
+  "triggerCount": 0
+}

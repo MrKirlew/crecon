@@ -9,11 +9,12 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from fastapi.encoders import jsonable_encoder
 import json
-from typing import Dict, List
+from typing import Dict, List, Any
 import logging
 from datetime import datetime
 from uuid import uuid4
 import pytz
+from google import genai
 
 from config import settings, get_settings, Settings
 from models import *
@@ -22,7 +23,17 @@ from rag_service import RAGService, get_rag_service
 from n8n_bridge import N8NBridge, get_n8n_bridge, N8NWorkflowError
 from google_tools import GOOGLE_WORKSPACE_TOOLS
 from google_functions import execute_google_function
+try:
+    from location_tools import LOCATION_TOOLS
+    from location_functions import execute_location_function
+    location_tools_available = True
+except ImportError as e:
+    location_tools_available = False
+    import logging
+    logging.getLogger(__name__).warning(f"Location tools not available: {e}")
 from voice_service import VoiceService
+from recording_service import SilentRecordingService, get_silent_recording_service
+from media_analysis_service import MediaAnalysisService, get_media_analysis_service
 
 # Import AI-augmented endpoints
 try:
@@ -99,7 +110,8 @@ async def call_llm(
     model: str = None,
     max_tokens: int = 2000,
     temperature: float = 0.7,
-    n8n_bridge: N8NBridge = None
+    n8n_bridge: N8NBridge = None,
+    user_location: Optional[Dict[str, float]] = None
 ) -> tuple[str, int, int]:
     """
     Call LLM API - Routes to appropriate provider based on model name:
@@ -156,10 +168,33 @@ async def call_llm(
             client = genai.Client(api_key=settings.google_api_key)
 
             # Convert messages to Gemini format
+            # Gemini doesn't have a separate "system" role, so system messages are sent as the first user message
+            # This ensures system instructions (including user name) are properly included
             gemini_messages = []
+            system_content_parts = []
+            
             for msg in messages:
-                role = "user" if msg["role"] == "user" else "model"
-                gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
+                if msg["role"] == "system":
+                    # Collect all system content
+                    system_content_parts.append(msg["content"])
+                elif msg["role"] == "user":
+                    # If we have system content and this is the first user message, combine them
+                    if system_content_parts and len(gemini_messages) == 0:
+                        # Combine system instructions with user message - system instructions come first
+                        combined_content = "\n\n".join(system_content_parts) + "\n\n---\n\nUser's message:\n" + msg["content"]
+                        gemini_messages.append({"role": "user", "parts": [{"text": combined_content}]})
+                        logger.debug(f"Combined system message ({len(system_content_parts)} parts) with first user message")
+                        system_content_parts = []  # Clear after using
+                    else:
+                        gemini_messages.append({"role": "user", "parts": [{"text": msg["content"]}]})
+                elif msg["role"] == "assistant":
+                    gemini_messages.append({"role": "model", "parts": [{"text": msg["content"]}]})
+                else:
+                    gemini_messages.append({"role": "model", "parts": [{"text": msg["content"]}]})
+            
+            # If we have system content but no user messages yet, send it as first user message
+            if system_content_parts and len(gemini_messages) == 0:
+                gemini_messages.append({"role": "user", "parts": [{"text": "\n\n".join(system_content_parts)}]})
 
             # Generate content with chat history
             # Function calling loop (max 5 iterations)
@@ -173,6 +208,11 @@ async def call_llm(
                 iteration += 1
                 logger.info(f"Gemini iteration {iteration}/{max_iterations}")
 
+                # Prepare tools list
+                tools_list = [GOOGLE_WORKSPACE_TOOLS]
+                if location_tools_available:
+                    tools_list.append(LOCATION_TOOLS)
+                
                 # Generate content with tools
                 response = client.models.generate_content(
                     model=model,
@@ -180,7 +220,7 @@ async def call_llm(
                     config={
                         "temperature": temperature,
                         "max_output_tokens": max_tokens,
-                        "tools": [GOOGLE_WORKSPACE_TOOLS],
+                        "tools": tools_list,
                     }
                 )
 
@@ -202,7 +242,15 @@ async def call_llm(
                                 logger.info(f"Function call: {fc.name} with args: {dict(fc.args)}")
 
                                 # Execute function
-                                if n8n_bridge:
+                                if fc.name.startswith("create_location") or fc.name.startswith("get_current_location") or fc.name.startswith("list_locations"):
+                                    # Location function - use user_location from call_llm parameter
+                                    function_result = await execute_location_function(
+                                        fc.name,
+                                        dict(fc.args),
+                                        user_current_location=user_location
+                                    )
+                                elif n8n_bridge:
+                                    # Google Workspace function
                                     function_result = await execute_google_function(
                                         fc.name,
                                         dict(fc.args),
@@ -413,13 +461,23 @@ async def chat(
             "Always include accurate dates/times when scheduling or summarizing events."
         )
 
-        # Inject system message with date/time and optional RAG context
+        # Get user name from request (ChatRequest is a Pydantic model)
+        user_name = request.user_name if hasattr(request, 'user_name') else None
+        logger.info(f"Received chat request - user_name: '{user_name}', request type: {type(request).__name__}")
+        
+        # Inject system message with date/time, user name, and optional RAG context
         system_content = f"You are an AI Executive Assistant with access to Google Workspace.\n\n{date_context}"
+        
+        if user_name:
+            system_content += f"\n\nIMPORTANT: The user's name is {user_name}. You MUST remember this and use it when appropriate. When the user asks 'what is my name' or 'what's my name' or 'who am I', you MUST respond with: 'Your name is {user_name}.' Do not say you don't have access to this information - you have been explicitly told the user's name."
+            logger.info(f"Injected user name into system prompt: {user_name}")
+        else:
+            logger.warning("No user_name provided in request")
 
         if rag_context:
             system_content += f"\n\nUse the following context to answer the user's query:\n\n{rag_context}"
 
-        system_content += "\n\nWhen creating calendar events, always use ISO 8601 format for dates (YYYY-MM-DDTHH:MM:SS). When attendees are mentioned by name, search contacts first to get their email addresses.\n\nWhen creating tasks, always convert due dates to RFC 3339 format with timezone offset (e.g., '2025-11-15T19:00:00-06:00' for 7pm Central Time on November 15, 2025). The current timezone is America/Chicago (UTC-6). If only a date is given without time, use 11:59 PM of that date in the local timezone. Always include the timezone offset in the format: YYYY-MM-DDTHH:MM:SS±HH:MM.\n\nWhen searching for contacts, if multiple matches are found, automatically return the information for the first/best match (usually the one with the exact name match). Only ask for clarification if the name is ambiguous and there are multiple people with the same exact name."
+        system_content += "\n\nIMPORTANT: When the user asks about their calendar, only provide information for the specific time period they asked about. If they ask 'what's on my calendar today', only show today's events. If they ask about 'this week', then show the week. Do not provide additional information beyond what was requested unless you explicitly ask first: 'Would you like to see your calendar for the rest of the week as well?'\n\nWhen creating calendar events, always use ISO 8601 format for dates (YYYY-MM-DDTHH:MM:SS). When attendees are mentioned by name, search contacts first to get their email addresses.\n\nWhen creating tasks, always convert due dates to RFC 3339 format with timezone offset (e.g., '2025-11-15T19:00:00-06:00' for 7pm Central Time on November 15, 2025). The current timezone is America/Chicago (UTC-6). If only a date is given without time, use 11:59 PM of that date in the local timezone. Always include the timezone offset in the format: YYYY-MM-DDTHH:MM:SS±HH:MM.\n\nWhen searching for contacts, if multiple matches are found, automatically return the information for the first/best match (usually the one with the exact name match). Only ask for clarification if the name is ambiguous and there are multiple people with the same exact name."
 
         system_message = {
             "role": "system",
@@ -455,13 +513,22 @@ async def chat(
             except Exception as e:
                 logger.warning(f"Failed to start Langfuse trace: {e}")
 
+        # Extract user location from request (for location functions)
+        user_location = None
+        if request.user_latitude and request.user_longitude:
+            user_location = {
+                "latitude": request.user_latitude,
+                "longitude": request.user_longitude
+            }
+        
         # Call LLM
         response_text, input_tokens, output_tokens = await call_llm(
             messages=messages,
             model=selected_model,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
-            n8n_bridge=n8n_bridge
+            n8n_bridge=n8n_bridge,
+            user_location=user_location
         )
 
         # Create usage report
@@ -695,6 +762,71 @@ async def voice_websocket(websocket: WebSocket):
         voice_service.clear_session(session_id)
 
 
+# ==================== Silent Recording + Media Analysis ====================
+
+@app.post("/api/recordings/silent", response_model=SilentRecordingResponse)
+async def create_silent_recording(
+    request: SilentRecordingRequest,
+    recording_service: SilentRecordingService = Depends(get_silent_recording_service),
+    settings_dep: Settings = Depends(get_settings),
+    n8n_bridge: N8NBridge = Depends(get_n8n_bridge)
+):
+    """Generate silent meeting transcripts and distribute through email/Drive."""
+    needs_gemini = bool(
+        request.audio_base64 or
+        request.summary_instructions or
+        (request.email_delivery and request.email_delivery.include_summary)
+    )
+
+    gemini_client = None
+    if needs_gemini:
+        if not settings_dep.google_api_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Google API key required for transcription and summaries"
+            )
+        gemini_client = genai.Client(api_key=settings_dep.google_api_key)
+
+    try:
+        return await recording_service.process_recording(
+            request,
+            gemini_client,
+            n8n_bridge
+        )
+    except Exception as exc:
+        logger.error("Silent recording processing failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process silent recording: {exc}"
+        )
+
+
+@app.post("/api/media/analyze", response_model=MediaAnalysisResponse)
+async def analyze_media(
+    request: MediaAnalysisRequest,
+    media_service: MediaAnalysisService = Depends(get_media_analysis_service),
+    settings_dep: Settings = Depends(get_settings)
+):
+    """Multimodal analysis endpoint for documents and images."""
+    gemini_client = None
+    if "gemini" in request.engines:
+        if not settings_dep.google_api_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Google API key required for Gemini analysis"
+            )
+        gemini_client = genai.Client(api_key=settings_dep.google_api_key)
+
+    try:
+        return await media_service.analyze(request, gemini_client)
+    except Exception as exc:
+        logger.error("Media analysis failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze media: {exc}"
+        )
+
+
 # ==================== RAG Endpoints ====================
 
 @app.post("/api/rag/index", status_code=status.HTTP_201_CREATED)
@@ -759,6 +891,49 @@ async def get_rag_stats(
 ):
     """Get RAG collection statistics"""
     return rag_service.get_collection_stats()
+
+
+# ==================== Conversation Logging Endpoint ====================
+
+@app.post("/api/conversation/log")
+async def log_conversation(
+    request: Dict[str, Any],
+    n8n_bridge: N8NBridge = Depends(get_n8n_bridge),
+    settings_dep: Settings = Depends(get_settings)
+):
+    """Log conversation to Google Sheets"""
+    try:
+        from sheets_logger import SheetsLogger
+        
+        # Use the same spreadsheet as location questions, or a separate one if configured
+        spreadsheet_id = getattr(settings_dep, 'location_questions_spreadsheet_id', None) or getattr(settings_dep, 'conversation_logging_spreadsheet_id', None)
+        
+        if not spreadsheet_id:
+            logger.warning("No spreadsheet_id configured for conversation logging. Set location_questions_spreadsheet_id in .env")
+            return {"status": "skipped", "message": "Spreadsheet ID not configured. Please set location_questions_spreadsheet_id in your .env file."}
+        
+        logger.info(f"Logging conversation to spreadsheet: {spreadsheet_id}")
+        logger_instance = SheetsLogger(n8n_bridge, spreadsheet_id=spreadsheet_id)
+        
+        success = await logger_instance.log_conversation(
+            timestamp=request.get("timestamp", datetime.utcnow().isoformat()),
+            user_message=request.get("user_message", ""),
+            assistant_message=request.get("assistant_message", ""),
+            user_name=request.get("user_name", "User"),
+            latitude=request.get("latitude"),
+            longitude=request.get("longitude")
+        )
+        
+        if success:
+            logger.info("Conversation logged successfully")
+            return {"status": "success", "message": "Conversation logged"}
+        else:
+            logger.error("Failed to log conversation - SheetsLogger returned False")
+            return {"status": "error", "message": "Failed to log conversation"}
+            
+    except Exception as e:
+        logger.error(f"Error logging conversation: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
 
 # ==================== N8N Workflow Endpoints ====================

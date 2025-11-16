@@ -47,6 +47,13 @@ A fully sovereign, self-hosted AI Executive Assistant platform leveraging Retrie
 | **Redis** (Optional) | Cache | 6379 | Redis 7 |
 | **Langfuse** (Optional) | Observability | 3000 | Next.js |
 
+## ✨ Intelligent Recording & Media Analysis
+
+- **Silent Recording Pipeline** – New `/api/recordings/silent` endpoint silently captures meetings, transcribes audio (via Gemini), optionally summarizes conversations, then routes transcripts through Gmail or stores them in Drive as either plain text or native Google Docs.
+- **Automated Distribution** – Choose per-recording delivery rules: email teams with formatted HTML notes, drop transcripts into Drive folders, and auto-share with collaborators.
+- **Multimodal Insight Engine** – `/api/media/analyze` accepts images (screen-shares, whiteboards) or documents (PDF/DOCX/TXT) and runs both Ollama (local vision model configurable via `OLLAMA_VISION_MODEL`) and Gemini in parallel for summaries, data extraction, sentiment, and action items.
+- **Document/Text Extraction** – Built-in PDF + DOCX parsing feeds clean text into LLMs before analysis, drastically improving signal quality for long documents.
+
 ## 🚀 Quick Start
 
 ### Prerequisites

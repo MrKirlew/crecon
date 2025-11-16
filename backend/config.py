@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # ==================== Ollama Configuration (Open Source AI) ====================
     ollama_host: str = "http://ollama:11434"
     ollama_base_url: str = "http://ollama:11434"
+    ollama_vision_model: str = "llava:13b"
 
     # ==================== LLM API Configuration ====================
     # Model routing is automatic based on model name prefix:
@@ -63,6 +64,10 @@ class Settings(BaseSettings):
     app_name: str = "AI Executive Assistant"
     app_version: str = "1.0.0"
     debug: bool = False
+
+    # Location-triggered questions configuration
+    location_questions_spreadsheet_id: Optional[str] = None
+    conversation_logging_spreadsheet_id: Optional[str] = None
 
     # CORS Configuration
     cors_origins: list[str] = ["*"]

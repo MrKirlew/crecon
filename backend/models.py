@@ -3,7 +3,7 @@ Pydantic Models for Request/Response Validation
 Enforces strict schemas to prevent cost exploitation and injection attacks
 """
 from pydantic import BaseModel, Field, validator
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
 
 
@@ -237,6 +237,130 @@ class QuestionRequest(BaseModel):
     recurrence: Optional[RecurrenceRule] = None
     throttle: Optional[ThrottleRule] = None
     enabled: bool = Field(default=True)
+
+
+# ==================== Recording & Media Models ====================
+
+class SilentRecordingSegment(BaseModel):
+    """Individual line inside a silent recording transcript"""
+    speaker: Optional[str] = Field(default=None, max_length=200)
+    text: str = Field(..., min_length=1, max_length=5000)
+    timestamp: Optional[str] = Field(default=None, max_length=100, description="Optional HH:MM:SS timestamp marker")
+
+
+class SilentRecordingEmailDelivery(BaseModel):
+    """Email distribution preferences for a silent recording transcript"""
+    enabled: bool = True
+    to: List[str] = Field(..., min_items=1)
+    cc: Optional[List[str]] = None
+    bcc: Optional[List[str]] = None
+    subject: Optional[str] = Field(default=None, max_length=500)
+    include_summary: bool = Field(default=True, description="Include AI generated summary before transcript")
+
+
+class SilentRecordingDriveDelivery(BaseModel):
+    """Google Drive delivery preferences"""
+    enabled: bool = True
+    parent_folder_id: Optional[str] = Field(default=None, description="Drive folder ID to store transcript under")
+    file_name: Optional[str] = Field(default=None, max_length=250)
+    file_format: Literal["text", "google_doc"] = Field(default="google_doc")
+    share_with: Optional[List[str]] = Field(default=None, description="Optional list of email addresses to grant reader access")
+
+
+class SilentRecordingRequest(BaseModel):
+    """Request payload for silent meeting recording transcription"""
+    meeting_title: str = Field(..., max_length=300)
+    started_at: Optional[str] = Field(default=None, description="ISO 8601 start timestamp")
+    ended_at: Optional[str] = Field(default=None, description="ISO 8601 end timestamp")
+    location: Optional[str] = Field(default=None, max_length=300)
+    participants: Optional[List[str]] = Field(default=None, description="Names or emails of attendees")
+    transcript_text: Optional[str] = Field(default=None, description="Plain text transcript (if already available)")
+    transcript_segments: Optional[List[SilentRecordingSegment]] = Field(default=None)
+    audio_base64: Optional[str] = Field(default=None, description="Base64 encoded audio payload for transcription")
+    audio_mime_type: Optional[str] = Field(default="audio/webm")
+    summary_instructions: Optional[str] = Field(default=None, max_length=2000)
+    email_delivery: Optional[SilentRecordingEmailDelivery] = None
+    drive_delivery: Optional[SilentRecordingDriveDelivery] = None
+
+    @validator('audio_base64')
+    def validate_audio_base64(cls, value, values):
+        if not value and not (values.get('transcript_text') or values.get('transcript_segments')):
+            raise ValueError("Provide transcript_text, transcript_segments, or audio_base64")
+        return value
+
+    @validator('email_delivery', 'drive_delivery')
+    def require_delivery_method(cls, value, values, **kwargs):
+        # Validation will happen after both fields processed via root validator
+        return value
+
+    @validator('transcript_segments', each_item=True)
+    def ensure_segments_have_text(cls, segment):
+        if not segment.text.strip():
+            raise ValueError("Transcript segment text cannot be empty")
+        return segment
+
+    @validator('participants')
+    def strip_participants(cls, participants):
+        if participants:
+            return [p.strip() for p in participants if p and p.strip()]
+        return participants
+
+    @validator('meeting_title')
+    def title_cannot_be_blank(cls, value):
+        if not value.strip():
+            raise ValueError("meeting_title cannot be blank")
+        return value
+
+    @validator('drive_delivery', always=True)
+    def validate_delivery_options(cls, value, values):
+        email_delivery = values.get('email_delivery')
+        has_email = email_delivery and email_delivery.enabled
+        has_drive = value and value.enabled
+        if not (has_email or has_drive):
+            raise ValueError("At least one delivery option (email or drive) must be enabled")
+        return value
+
+
+class SilentRecordingResponse(BaseModel):
+    """Response payload after processing a silent recording"""
+    recording_id: str
+    transcript_text: str
+    summary: Optional[str] = None
+    email_delivery: Optional[Dict[str, Any]] = None
+    drive_delivery: Optional[Dict[str, Any]] = None
+
+
+class MediaAnalysisRequest(BaseModel):
+    """Request payload for multimodal media analysis"""
+    filename: str = Field(..., max_length=255)
+    mime_type: str = Field(..., max_length=200)
+    base64_content: str = Field(..., description="Base64 encoded binary payload")
+    instructions: Optional[str] = Field(default=None, max_length=2000, description="Extra instructions for analysis")
+    analysis_focus: List[Literal["summary", "extraction", "actions", "sentiment"]] = Field(
+        default_factory=lambda: ["summary"],
+        description="Types of insights to generate"
+    )
+    engines: List[Literal["gemini", "ollama"]] = Field(
+        default_factory=lambda: ["gemini", "ollama"],
+        description="LLM engines to run analysis against"
+    )
+    include_text_extraction: bool = Field(default=True, description="Extract text when possible for documents")
+
+    @validator('engines')
+    def validate_engines(cls, engines):
+        if not engines:
+            raise ValueError("At least one engine must be specified")
+        return engines
+
+
+class MediaAnalysisResponse(BaseModel):
+    """Response for multimodal analysis requests"""
+    filename: str
+    mime_type: str
+    extracted_text: Optional[str] = None
+    gemini_analysis: Optional[str] = None
+    ollama_analysis: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class QuestionResponse(BaseModel):
