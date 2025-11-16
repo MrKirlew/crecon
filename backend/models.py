@@ -251,11 +251,17 @@ class SilentRecordingSegment(BaseModel):
 class SilentRecordingEmailDelivery(BaseModel):
     """Email distribution preferences for a silent recording transcript"""
     enabled: bool = True
-    to: List[str] = Field(..., min_items=1)
+    to: Optional[List[str]] = Field(default=None, min_items=1)
     cc: Optional[List[str]] = None
     bcc: Optional[List[str]] = None
     subject: Optional[str] = Field(default=None, max_length=500)
     include_summary: bool = Field(default=True, description="Include AI generated summary before transcript")
+
+    @validator('to')
+    def validate_to_when_enabled(cls, v, values):
+        if values.get('enabled') and not v:
+            raise ValueError("'to' field is required when email_delivery is enabled")
+        return v
 
 
 class SilentRecordingDriveDelivery(BaseModel):
