@@ -31,6 +31,9 @@ class ChatRequest(BaseModel):
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     enable_tools: bool = Field(default=True, description="Enable N8N workflow execution")
     user_id: Optional[str] = Field(default=None, description="User identifier for tracking")
+    user_name: Optional[str] = Field(default=None, description="User's full name from settings")
+    user_latitude: Optional[float] = Field(default=None, ge=-90, le=90, description="User's current latitude")
+    user_longitude: Optional[float] = Field(default=None, ge=-180, le=180, description="User's current longitude")
 
 
 class TokenUsageResponse(BaseModel):

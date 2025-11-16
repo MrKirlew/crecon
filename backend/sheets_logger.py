@@ -69,6 +69,59 @@ class SheetsLogger:
             logger.error(f"Failed to log Q&A pair to Sheets: {e}")
             return False
     
+    async def log_conversation(
+        self,
+        timestamp: str,
+        user_message: str,
+        assistant_message: str,
+        user_name: str = "User",
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None
+    ) -> bool:
+        """
+        Log a conversation to Google Sheets (convologging tab)
+        Returns True if successful
+        """
+        if not self.spreadsheet_id:
+            logger.warning("No spreadsheet_id configured, skipping conversation log")
+            return False
+
+        try:
+            # Send directly to the conversation logging webhook endpoint
+            # The N8N workflow expects data in $json.body format
+            import httpx
+            webhook_url = f"{self.n8n_bridge.base_url}/webhook/google-workspace"
+
+            payload = {
+                "timestamp": timestamp,
+                "user_name": user_name,
+                "user_message": user_message,
+                "assistant_message": assistant_message,
+                "latitude": latitude,
+                "longitude": longitude
+            }
+
+            logger.info(f"Sending conversation log to N8N webhook: {webhook_url}")
+            logger.info(f"Payload: {payload}")
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    webhook_url,
+                    json=payload,
+                    timeout=30.0
+                )
+
+                if response.status_code == 200:
+                    logger.info(f"Logged conversation to Sheets: {timestamp}")
+                    return True
+                else:
+                    logger.error(f"Failed to log conversation: HTTP {response.status_code} - {response.text}")
+                    return False
+
+        except Exception as e:
+            logger.error(f"Failed to log conversation to Sheets: {e}")
+            return False
+    
     async def ensure_sheet_exists(self) -> bool:
         """
         Ensure the location_qAnda sheet exists with proper headers
