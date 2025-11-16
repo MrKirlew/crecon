@@ -3,7 +3,7 @@ FastAPI AI Agent Gateway - Main Application
 Intelligence Layer: LLM orchestration, RAG pipeline, token counting, N8N bridge
 Optimized for async I/O-bound operations
 """
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
@@ -22,6 +22,7 @@ from rag_service import RAGService, get_rag_service
 from n8n_bridge import N8NBridge, get_n8n_bridge, N8NWorkflowError
 from google_tools import GOOGLE_WORKSPACE_TOOLS
 from google_functions import execute_google_function
+from voice_service import VoiceService
 
 # Import AI-augmented endpoints
 try:
@@ -68,6 +69,14 @@ app.add_middleware(
 if ai_endpoints_available:
     app.include_router(ai_router)
     logger.info("AI-augmented endpoints registered (3,000+ command variations)")
+
+# Include location-triggered question flow endpoints
+try:
+    from location_endpoints import router as location_router
+    app.include_router(location_router)
+    logger.info("Location-triggered question flow endpoints registered")
+except ImportError as e:
+    logger.warning(f"Location endpoints not available: {e}")
 
 # Optional Langfuse observability
 langfuse_client = None
@@ -410,7 +419,7 @@ async def chat(
         if rag_context:
             system_content += f"\n\nUse the following context to answer the user's query:\n\n{rag_context}"
 
-        system_content += "\n\nWhen creating calendar events, always use ISO 8601 format for dates (YYYY-MM-DDTHH:MM:SS). When attendees are mentioned by name, search contacts first to get their email addresses."
+        system_content += "\n\nWhen creating calendar events, always use ISO 8601 format for dates (YYYY-MM-DDTHH:MM:SS). When attendees are mentioned by name, search contacts first to get their email addresses.\n\nWhen creating tasks, always convert due dates to RFC 3339 format with timezone offset (e.g., '2025-11-15T19:00:00-06:00' for 7pm Central Time on November 15, 2025). The current timezone is America/Chicago (UTC-6). If only a date is given without time, use 11:59 PM of that date in the local timezone. Always include the timezone offset in the format: YYYY-MM-DDTHH:MM:SS±HH:MM.\n\nWhen searching for contacts, if multiple matches are found, automatically return the information for the first/best match (usually the one with the exact name match). Only ask for clarification if the name is ambiguous and there are multiple people with the same exact name."
 
         system_message = {
             "role": "system",
@@ -421,11 +430,16 @@ async def chat(
         selected_model = request.model or settings_dep.default_llm_model
 
         # Start Langfuse trace (SDK v2)
+        trace_id = None
         if langfuse_client:
             try:
+                # Extract user_id from request
+                user_id = request.user_id if hasattr(request, 'user_id') and request.user_id else None
+                
                 trace = langfuse_client.trace(
                     id=f"chat-{uuid4()}",
                     name="chat_completion",
+                    user_id=user_id,  # User tracking
                     input=messages,
                     start_time=request_start,
                     metadata={
@@ -470,12 +484,18 @@ async def chat(
                     output=response_text,
                     start_time=request_start,
                     end_time=datetime.utcnow(),
+                    usage={
+                        "input": usage.input_tokens,
+                        "output": usage.output_tokens,
+                        "total": usage.total_tokens,
+                        "unit": "TOKENS"
+                    },
                     metadata={
                         "rag_used": request.use_rag and rag_context is not None,
                         "rag_context_tokens": rag_tokens,
-                        "input_tokens": usage.input_tokens,
-                        "output_tokens": usage.output_tokens,
                         "total_cost": usage.total_cost_usd,
+                        "input_cost": usage.input_cost_usd,
+                        "output_cost": usage.output_cost_usd,
                         "processing_time_ms": (datetime.utcnow() - request_start).total_seconds() * 1000,
                         "rag_sources": rag_sources
                     }
@@ -515,6 +535,164 @@ async def chat(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+
+# ==================== Voice Conversation WebSocket ====================
+
+# Initialize voice service
+voice_service = VoiceService()
+
+@app.websocket("/api/voice/ws")
+async def voice_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time voice conversations
+    Handles bidirectional communication for voice input/output
+    """
+    await websocket.accept()
+    session_id = str(uuid4())
+    logger.info(f"Voice WebSocket connection established: {session_id}")
+    
+    try:
+        # Send welcome message
+        await websocket.send_json({
+            "type": "connected",
+            "session_id": session_id,
+            "message": "Voice connection established. Ready to listen."
+        })
+        
+        while True:
+            # Receive message from client
+            data = await websocket.receive_json()
+            message_type = data.get("type")
+            
+            if message_type == "voice_text":
+                # Client sent transcribed text
+                text = data.get("text", "").strip()
+                if not text:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Empty text received"
+                    })
+                    continue
+                
+                logger.info(f"Voice input received: {text[:50]}...")
+                
+                # Process through voice service
+                voice_result = await voice_service.process_voice_message(
+                    text=text,
+                    session_id=session_id,
+                    conversation_history=voice_service.get_session_history(session_id)
+                )
+                
+                if voice_result["status"] != "success":
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": voice_result.get("error", "Processing failed")
+                    })
+                    continue
+                
+                # Get conversation history
+                messages = voice_result["messages"]
+                
+                # Send processing status
+                await websocket.send_json({
+                    "type": "processing",
+                    "message": "Processing your request..."
+                })
+                
+                # Call LLM with conversation history
+                try:
+                    # Get current date/time for context
+                    local_tz = pytz.timezone('America/Chicago')
+                    current_local = datetime.now(local_tz)
+                    current_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
+                    date_context = (
+                        "Current clock references:\n"
+                        f"- Local (America/Chicago): {current_local.strftime('%A, %B %d, %Y at %I:%M %p %Z')}\n"
+                        f"- UTC: {current_utc.strftime('%A, %B %d, %Y at %H:%M %Z')}\n"
+                        "Always include accurate dates/times when scheduling or summarizing events."
+                    )
+                    
+                    # Build system message
+                    system_content = f"You are an AI Executive Assistant with access to Google Workspace.\n\n{date_context}"
+                    system_content += "\n\nWhen creating calendar events, always use ISO 8601 format for dates (YYYY-MM-DDTHH:MM:SS). When attendees are mentioned by name, search contacts first to get their email addresses.\n\nWhen searching for contacts, if multiple matches are found, automatically return the information for the first/best match (usually the one with the exact name match). Only ask for clarification if the name is ambiguous and there are multiple people with the same exact name."
+                    
+                    # Convert to format expected by call_llm
+                    llm_messages = [{"role": "system", "content": system_content}]
+                    for msg in messages:
+                        llm_messages.append({
+                            "role": msg["role"],
+                            "content": msg["content"]
+                        })
+                    
+                    # Get dependencies
+                    settings_dep = get_settings()
+                    n8n_bridge = get_n8n_bridge()
+                    
+                    # Call LLM (this handles function calling automatically)
+                    response_text, input_tokens, output_tokens = await call_llm(
+                        messages=llm_messages,
+                        model=settings_dep.default_llm_model,
+                        max_tokens=2000,
+                        temperature=0.7,
+                        n8n_bridge=n8n_bridge
+                    )
+                    
+                    # Format response for voice
+                    voice_response = await voice_service.format_response_for_voice(
+                        chat_response=response_text,
+                        session_id=session_id
+                    )
+                    
+                    # Send response back to client
+                    await websocket.send_json({
+                        "type": "response",
+                        "text": response_text,
+                        "session_id": session_id,
+                        "tokens": {
+                            "input": input_tokens,
+                            "output": output_tokens
+                        }
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error in voice LLM call: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Failed to process request: {str(e)}"
+                    })
+            
+            elif message_type == "ping":
+                # Keep-alive ping
+                await websocket.send_json({"type": "pong"})
+            
+            elif message_type == "clear_history":
+                # Clear conversation history
+                voice_service.clear_session(session_id)
+                await websocket.send_json({
+                    "type": "history_cleared",
+                    "message": "Conversation history cleared"
+                })
+            
+            else:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"Unknown message type: {message_type}"
+                })
+                
+    except WebSocketDisconnect:
+        logger.info(f"Voice WebSocket disconnected: {session_id}")
+        voice_service.clear_session(session_id)
+    except Exception as e:
+        logger.error(f"Voice WebSocket error: {e}")
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Connection error: {str(e)}"
+            })
+        except:
+            pass
+        voice_service.clear_session(session_id)
 
 
 # ==================== RAG Endpoints ====================
