@@ -87,36 +87,24 @@ class SheetsLogger:
             return False
 
         try:
-            # Send directly to the conversation logging webhook endpoint
-            # The N8N workflow expects data in $json.body format
-            import httpx
-            webhook_url = f"{self.n8n_bridge.base_url}/webhook/google-workspace"
-
+            # Send data directly to the conversation logging webhook
+            # The N8N workflow expects data in $json.body.* format
             payload = {
-                "timestamp": timestamp,
-                "user_name": user_name,
-                "user_message": user_message,
-                "assistant_message": assistant_message,
-                "latitude": latitude,
-                "longitude": longitude
+                "body": {
+                    "timestamp": timestamp,
+                    "user_name": user_name,
+                    "user_message": user_message,
+                    "assistant_message": assistant_message,
+                    "latitude": str(latitude) if latitude is not None else "",
+                    "longitude": str(longitude) if longitude is not None else ""
+                }
             }
 
-            logger.info(f"Sending conversation log to N8N webhook: {webhook_url}")
-            logger.info(f"Payload: {payload}")
+            # Use _post_webhook to send directly to the google-workspace webhook endpoint
+            result = await self.n8n_bridge._post_webhook("google-workspace", payload)
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    webhook_url,
-                    json=payload,
-                    timeout=30.0
-                )
-
-                if response.status_code == 200:
-                    logger.info(f"Logged conversation to Sheets: {timestamp}")
-                    return True
-                else:
-                    logger.error(f"Failed to log conversation: HTTP {response.status_code} - {response.text}")
-                    return False
+            logger.info(f"Logged conversation to Sheets: {timestamp}")
+            return True
 
         except Exception as e:
             logger.error(f"Failed to log conversation to Sheets: {e}")
