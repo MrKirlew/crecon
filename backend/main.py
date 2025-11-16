@@ -790,8 +790,8 @@ async def create_silent_recording(
     try:
         return await recording_service.process_recording(
             request,
-            gemini_client,
-            n8n_bridge
+            n8n_bridge,
+            gemini_client
         )
     except Exception as exc:
         logger.error("Silent recording processing failed: %s", exc)

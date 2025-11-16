@@ -31,8 +31,8 @@ class SilentRecordingService:
     async def process_recording(
         self,
         request: SilentRecordingRequest,
-        gemini_client=None,
-        n8n_bridge: N8NBridge
+        n8n_bridge: N8NBridge,
+        gemini_client=None
     ) -> SilentRecordingResponse:
         """
         Orchestrate full pipeline: transcription (if needed), summary generation,
