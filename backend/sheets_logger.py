@@ -100,14 +100,19 @@ class SheetsLogger:
                 }
             }
 
-            # Use _post_webhook to send directly to the google-workspace webhook endpoint
+            # Send directly to the google-workspace webhook endpoint
+            # This matches the N8N workflow configuration at /webhook/google-workspace
             result = await self.n8n_bridge._post_webhook("google-workspace", payload)
 
-            logger.info(f"Logged conversation to Sheets: {timestamp}")
-            return True
+            if result.get("success"):
+                logger.info(f"Logged conversation to Sheets: {timestamp}")
+                return True
+            else:
+                logger.error(f"Failed to log conversation: {result}")
+                return False
 
         except Exception as e:
-            logger.error(f"Failed to log conversation to Sheets: {e}")
+            logger.error(f"Failed to log conversation to Sheets: {e}", exc_info=True)
             return False
     
     async def ensure_sheet_exists(self) -> bool:
